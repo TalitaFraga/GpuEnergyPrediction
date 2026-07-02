@@ -33,6 +33,7 @@ def calculate_flops(model, image_size):
     )
     return macs * 2
 
+
 def gpu_logger(output_file, stop_event, interval=0.5):
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +80,7 @@ def main():
     parser.add_argument("--dataset_size", type=int, default=1000)
     parser.add_argument("--image_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--learning_rate", type=float, default=0.01)
     args = parser.parse_args()
 
     experiment_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -86,6 +88,11 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+
+    torch_version = torch.__version__
+    cuda_available = torch.cuda.is_available()
+    cuda_version = torch.version.cuda
+    log_power_available = "unknown"
 
     print(f"Experimento: {experiment_id}")
     print(f"Dispositivo: {device}")
@@ -117,17 +124,17 @@ def main():
     params = count_params(model)
     layers = count_layers(model)
     flops = calculate_flops(model, args.image_size)
+    gflops = flops / 1e9
     model_size_mb = (params * 4) / (1024 ** 2)
 
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.01)
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
 
     log_file = f"logs/gpu_log_{experiment_id}.csv"
 
     stop_event = threading.Event()
-
     logger_thread = threading.Thread(
         target=gpu_logger,
         args=(log_file, stop_event)
@@ -182,11 +189,17 @@ def main():
                 "num_workers",
                 "params",
                 "flops",
+                "gflops",
                 "layers",
                 "model_size_mb",
+                "learning_rate",
                 "device",
                 "gpu_count",
                 "gpu_name",
+                "torch_version",
+                "cuda_available",
+                "cuda_version",
+                "log_power_available",
                 "train_time_seconds",
                 "gpu_log_file"
             ])
@@ -204,11 +217,17 @@ def main():
             args.num_workers,
             params,
             flops,
+            round(gflops, 6),
             layers,
             round(model_size_mb, 4),
+            args.learning_rate,
             device,
             gpu_count,
             gpu_name,
+            torch_version,
+            cuda_available,
+            cuda_version,
+            log_power_available,
             round(train_time, 4),
             log_file
         ])
