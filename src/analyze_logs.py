@@ -78,11 +78,16 @@ def main():
 
     final_df = experiments.merge(summary_df, on="gpu_log_file", how="left")
 
+    # Energia = potência média durante o treino x tempo de treino.
+    # 1 Wh = 3600 J. Fica vazio quando a GPU não informa a potência.
+    final_df["energy_j"] = final_df["avg_power_w"] * final_df["train_time_seconds"]
+    final_df["energy_wh"] = final_df["energy_j"] / 3600
+
     Path("results").mkdir(exist_ok=True)
     final_df.to_csv(output_path, index=False)
 
     print(f"Resumo salvo em: {output_path}")
-    print(final_df.head())
+    print(final_df[["architecture", "batch_size", "image_size", "train_time_seconds", "avg_power_w", "energy_j"]])
 
 
 if __name__ == "__main__":

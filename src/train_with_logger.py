@@ -34,7 +34,35 @@ def calculate_flops(model, image_size):
     return macs * 2
 
 
-def gpu_logger(output_file, stop_event, interval=0.5):
+def power_was_logged(log_file):
+    with open(log_file, newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                float(row["power_w"])
+                return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+def warmup(model, loader, criterion, optimizer, device, steps):
+    # Primeiras iterações na GPU são mais lentas (inicialização do CUDA/cuDNN),
+    # então rodamos algumas antes de começar a medir.
+    for step, (images, labels) in enumerate(loader):
+        if step >= steps:
+            break
+        images = images.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad()
+        loss = criterion(model(images), labels)
+        loss.backward()
+        optimizer.step()
+
+    if device == "cuda":
+        torch.cuda.synchronize()
+
+
+def gpu_logger(output_file, stop_event, interval=0.2):
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_file, "w", newline="") as f:
@@ -75,6 +103,12 @@ def gpu_logger(output_file, stop_event, interval=0.5):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--architecture",
+        default="resnet18",
+        choices=["resnet18", "resnet34", "resnet50", "mobilenet_v2", "vgg11", "efficientnet_b0"]
+    )
+    parser.add_argument("--warmup_steps", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--dataset_size", type=int, default=1000)
@@ -92,9 +126,9 @@ def main():
     torch_version = torch.__version__
     cuda_available = torch.cuda.is_available()
     cuda_version = torch.version.cuda
-    log_power_available = "unknown"
 
     print(f"Experimento: {experiment_id}")
+    print(f"Arquitetura: {args.architecture}")
     print(f"Dispositivo: {device}")
     print(f"GPU: {gpu_name}")
 
@@ -119,7 +153,7 @@ def main():
         num_workers=args.num_workers
     )
 
-    model = models.resnet18(weights=None, num_classes=10)
+    model = getattr(models, args.architecture)(weights=None, num_classes=10)
 
     params = count_params(model)
     layers = count_layers(model)
@@ -131,6 +165,8 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+
+    warmup(model, loader, criterion, optimizer, device, args.warmup_steps)
 
     log_file = f"logs/gpu_log_{experiment_id}.csv"
 
@@ -167,6 +203,7 @@ def main():
     logger_thread.join()
 
     train_time = end - start
+    log_power_available = power_was_logged(log_file)
 
     Path("results").mkdir(exist_ok=True)
     file_path = Path("results/experiments_with_logs.csv")
@@ -207,7 +244,7 @@ def main():
         writer.writerow([
             experiment_id,
             datetime.now().isoformat(timespec="seconds"),
-            "resnet18",
+            args.architecture,
             "cifar10",
             "sgd",
             args.batch_size,
